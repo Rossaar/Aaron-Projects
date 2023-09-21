@@ -1,0 +1,1299 @@
+# ATTEND Analysis Script: Analysis of the STNI data, for a first pass validation / psychometrics
+#
+# Input: "ATTEND_allOO_pulled2022-07-18.rds"
+#  * Produced by: ATTEND_allOO_2022-07-18.R in HendricksonLab / Data Pull Scripts
+#
+# Output:
+#   XXXXXX
+#
+# History:
+#   2022-08-18 RCH wrote it
+
+###############################
+# I. Set up
+###############################
+```{r}
+usersetting="Aaron" 
+# Aaron, if you run this script and want to add default options for you that are different, just 
+# swap this to "Aaron" and update away (I set up the library path portion this way as
+# an example, but you may find other pLaces here that you want to swap things up a bit)
+
+if(usersetting=="Rebecca"){
+  .libPaths("C:/LocalR/R-4.0.5/library")
+  githubpath="C:\\Users\\vhapughendrr\\GitHub\\"
+}else if(usersetting=="Aaron"){
+  # Put any library path you want to use instead here, and the path to your local github directory
+  .libPaths("C:/LocalR/R-4.2.1/Library")
+  githubpath="U:\\My Documents\\GitHub\\"
+}else{
+  warning("You'll need to set a githubpath for much of the code below to work...")
+}
+
+# Settings
+importdirectories<-list(
+  github=githubpath,
+  workingdatasaves="R:\\MIRECC\\STUDIES\\Hendrickson_1588176-01881_ATTEND\\Study Data\\Data\\Analyses\\",
+  plotsaves="R:\\MIRECC\\STUDIES\\Hendrickson_1588176-01881_ATTEND\\Study Data\\Data\\Analyses\\STNIplots\\"
+)
+importfilenames<-list(
+  workingdata="ATTEND_allOO_pulled2022-10-27.rds"
+ #Original Data File used for analysis: 
+   # workingdata="ATTEND_allOO_pulled2022-7-18.rds"
+ # workingdata="ATTEND BL AFR Test.rds"
+)
+saveoptions <- list(
+  resave=TRUE,
+  savetag="STNI"
+)
+
+# These you need for sure:
+library(data.table)
+library(ggplot2)
+library(ggpubr)
+library(data.table)
+
+# I can't remember which of these you actually will need for this
+library(devtools)
+library(readr)
+library(readxl)
+library(openxlsx)
+library(htmlTable)
+library(rvest) # for stripping html tags
+library(flextable)
+library(officer)
+library(nlme)
+library(psych)
+library(psychTools)
+library(jtools) # for visualizing lm output
+library(ggstance) # needed by jtools
+library(broom.mixed) # needed by ggstance!
+library(mediation)
+library(gridExtra)
+library(nlme)
+library(ltm)
+# These you almost certainly won't need
+library(maps)
+library(ggmap)
+
+# Just source these, because package version never up to date:
+source(paste0(importdirectories$github,"HendricksonLab\\HLUtilities\\R\\Utilities.R"))
+source(paste0(importdirectories$github,"HendricksonLab\\CoreInfastructure\\R\\GeneralDataFunctions.R"))
+source(paste0(importdirectories$github,"HendricksonLab\\CoreInfastructure\\R\\qualtricsFunctions.R"))
+
+# Functions:
+
+
+# Plot settings that carry through:
+reltextsize=1.3
+labelsize=9
+
+#################################
+# II. Load the prepared data set, initial prep
+#################################
+
+dp <- readRDS(paste0(importdirectories$workingdatasaves,importfilenames$workingdata))
+# dp stands for data package, which has a couple of parts:
+names(dp)
+
+# The dataQL data table is the main data:
+dp$data
+# You can see the column names:
+names(dp$dataQL)
+
+# Other useful one:
+dp$dictionaryQL
+names(dp$dictionaryQL)
+# You can look at the entry for a particular variable (column in dp$dataQL):
+dp$dictionaryQL[VarID=="pcl5total"]
+
+# Clean age:
+dp$dataQL[age<21,.(age,attendDem_job)]
+# the 3 that are "teens" are clearly legit responses, will change age to missing data
+dp$dataQL[age<18,age:=NA]
+
+###########################
+# III. Basic characterizations
+###########################
+
+#############
+# Basic demographics, profile of the responses we've gotten:
+
+# how many responses do we have, with what completeness?
+nBL <- length(dp$dataQL[VisitID=="BL"]$qaResponseID)
+nFu <- length(dp$dataQL[VisitID!="BL"][trelative>0]$qaResponseID)
+
+# Age
+mAge <- mean(dp$dataQL$age,na.rm=TRUE)
+sdAge <- sd(dp$dataQL$age,na.rm=TRUE)
+rangeAge <- range(dp$dataQL$age,na.rm=TRUE)
+
+# Field
+nHCW <- sum(dp$dataQL[VisitID=="BL"]$attendDem_HCW)
+nFR <- sum(dp$dataQL[VisitID=="BL"]$attendDem_FR)
+nOverlap <- length(dp$dataQL[VisitID=="BL"][attendDem_HCW==TRUE][attendDem_FR==TRUE]$qaStartDate) # 6
+nPolice <- sum(dp$dataQL[VisitID=="BL"]$attendDem_police)
+nFire <- sum(dp$dataQL[VisitID=="BL"]$attendDem_fire)
+nParamedic <- sum(dp$dataQL[VisitID=="BL"]$attendDem_emt)
+nPhysician <- sum(dp$dataQL[VisitID=="BL"]$attendDem_physician)
+nNurse <- sum(dp$dataQL[VisitID=="BL"]$attendDem_nurse)
+nArnppa <- sum(dp$dataQL[VisitID=="BL"]$attendDem_arnppa)
+fieldVector <- data.table(nHCW,nFR,nPolice,nFire,nParamedic,nPhysician,nNurse,nArnppa)
+fieldVector
+
+###########################dp$dataQL[VisitID=="BL"]$attendDem_HCW
+# III. Pull out the STNI data to use, along with some demographics
+###########################
+
+# 1) What variables do we want to preserve?
+
+# Demographic and basic ID variables:
+var2keep=c("PtID","VisitID","age","gender")
+
+# The STNI itself:
+dp$dictionaryQL[Base=="STNI"]$VarID
+var2keep=c(var2keep,dp$dictionaryQL[Base=="STNI"]$VarID)
+
+# Let's remind ourselves why there's stni10 and stni10a (and same for 11):
+dp$dictionaryQL[VarID=="stni10"]
+dp$dictionaryQL[VarID=="stni10a"]
+  # The answer is in the FieldLabel for stni10a: 
+dp$dictionaryQL[VarID=="stni10a"]$FieldLabel
+  # "Adjusted version of stni10 so monotonic"
+  # Ie, if you look at the order of the answer choices:
+dp$dictionaryQL[VarID=="stni10"]$answerChoices
+  # ...they were out of order from the way it would make sense to
+  # analyze them, ie, "never woken up sweaty" was the last=4 instead of first=0
+  # So, stni10a is the same question but with the answer choices
+  # rearranged so that never woken up sweaty is coded as 0
+  # (stni11 vs 11a is the same)
+
+# Make the actual tight data set:
+data=dp$dataQL[,..var2keep] # note the ".." notation, which is very specific but handy; 
+  # see this source for its function: https://stackoverflow.com/questions/12391950/select-assign-to-data-table-when-variable-names-are-stored-in-a-character-vect
+dictionary=dp$dictionaryQL[VarID%in%var2keep]
+
+# Pull the demographic variables forward now, because otherwise I forget all the time:
+temp=data[VisitID=="BL",.(PtID,age,gender)]
+data[,age:=NULL]
+data[,gender:=NULL]
+data=merge(data,temp,by="PtID",all.x=TRUE,all.y=FALSE)
+
+# Drop any visits without a stniTotal, as we only want complete responses for this purpose:
+data=data[!is.na(stniTotal)]
+  # CONSIDER: do you want to go back and keep folks with NA for the bed partner dependent questions?
+
+# How many responses does this leave?
+dim(data) # 950 respodnses
+length(unique(data$PtID)) # ...from 571 individual respondents 
+
+
+
+#Write csv file for stni items 
+#write.csv(na.omit(data.table(stni1=dp$dataQL[VisitID=="BL"]$stni1,
+#           stni2=dp$dataQL[VisitID=="BL"]$stni2,
+#           stni3=dp$dataQL[VisitID=="BL"]$stni3,
+#           stni4=dp$dataQL[VisitID=="BL"]$stni4,
+#           stni5=dp$dataQL[VisitID=="BL"]$stni5,
+#           stni6=dp$dataQL[VisitID=="BL"]$stni6,
+#           stni7=dp$dataQL[VisitID=="BL"]$stni7,
+#           stni8=dp$dataQL[VisitID=="BL"]$stni8,
+#           stni9=dp$dataQL[VisitID=="BL"]$stni9,
+#           stni10=dp$dataQL[VisitID=="BL"]$stni10a,
+#           stni11=dp$dataQL[VisitID=="BL"]$stni11a)))
+#Write csv file for shorter STNI
+#write.csv(na.omit(data.table(stni1=dp$dataQL[VisitID=="BL"]$stni1,
+ #                            stni2=dp$dataQL[VisitID=="BL"]$stni2,
+#                             stni3=dp$dataQL[VisitID=="BL"]$stni3,
+#                             stni4=dp$dataQL[VisitID=="BL"]$stni4,
+#                             stni5=dp$dataQL[VisitID=="BL"]$stni5,
+#                             stni6=dp$dataQL[VisitID=="BL"]$stni6,
+#                             stni7=dp$dataQL[VisitID=="BL"]$stni7,
+#                             stni8=dp$dataQL[VisitID=="BL"]$stni8,
+#                             stni9=dp$dataQL[VisitID=="BL"]$stni9,
+#                             stni10=dp$dataQL[VisitID=="BL"]$stni10a,
+#                             stni11=dp$dataQL[VisitID=="BL"]$stni11a)))
+#CSV file for STNI Short
+#write.csv(na.omit(data.table(stni1=dp$dataQL[VisitID=="BL"]$stni1,
+#                             stni2=dp$dataQL[VisitID=="BL"]$stni2,
+#                             stni3=dp$dataQL[VisitID=="BL"]$stni3,
+                          #Possible add on for partner questions
+                             #stni8=dp$dataQL[VisitID=="BL"]$stni8,
+                             #stni9=dp$dataQL[VisitID=="BL"]$stni9,
+
+                             #stni11=dp$dataQL[VisitID=="BL"]$stni11a)))
+#TEST
+#(data.table(na.omit(
+#            stni1=dp$dataQL[VisitID=="BL"]$stni1,
+#            stni2=dp$dataQL[VisitID=="BL"]$stni2,
+#            stni3=dp$dataQL[VisitID=="BL"]$stni3,
+#            stni4=dp$dataQL[VisitID=="BL"]$stni4,
+#            stni5=dp$dataQL[VisitID=="BL"]$stni5,
+#            stni6=dp$dataQL[VisitID=="BL"]$stni6,
+#            stni7=dp$dataQL[VisitID=="BL"]$stni7,
+#            stni10=dp$dataQL[VisitID=="BL"]$stni10a,
+#            stni11=dp$dataQL[VisitID=="BL"]$stni11a))&is.na(dp$dataQL$stni8))
+            
+#STNI and PCL datatable
+#View(data.table(na.omit(
+#  (stniTotal=dp$dataQL[VisitID=="BL"]$stniTotal) &
+#  (pclTotal=dp$dataQL[VisitID=="BL"]$pcl5total))))
+
+(stniTotal=dp$dataQL[VisitID=="BL"]$stniTotal) &
+  (pclTotal=dp$dataQL[VisitID=="BL"]$pcl5total)
+#Wow did this actually work?
+plot(na.omit(dp$dataQL[VisitID=="BL", .(stni9total, pcl5total)]))
+ggplot(dp$dataQL[VisitID=="BL"], aes(x=stni9total, y=pcl5total))+geom_point()
+
+dp$dataQL$pcl5total[1]
+dp$dataQL$stni9total[1]
+data.table(na.omit(dp$dataQL$stni9total))
+data.table(na.omit(dp$dataQL$pcl5total))
+dp$dataQL$trelative
+(data.table(dp$dataQL[VisitID=="OO3mo"]$stni9total, dp$dataQL[VisitID=="BL"]$stni9total))
+#View(dp$dataQL)
+
+#PTSD Diagnosis
+#na.omit((dp$dataQL$pcl5i1>=2 & 
+#    dp$dataQL$pcl5i2>=2 |
+#    dp$dataQL$pcl5i3>=2 |
+#    dp$dataQL$pcl5i4>=2 |
+#    dp$dataQL$pcl5i5>=2) &
+#      (dp$dataQL$pcl5i6 |
+#       dp$dataQL$pcl5i7) &
+#          (if sum(
+#            dp$dataQL$pcl5i8>=2 |
+#            dp$dataQL$pcl5i9>=2 |
+#            dp$dataQL$pcl5i10>=2| 
+#            dp$dataQL$pcl5i11>=2| 
+#            dp$dataQL$pcl5i12>=2| 
+#            dp$dataQL$pcl5i13>=2|
+#            dp$dataQL$pcl5i14>=2)>=2))
+    
+#)
+
+na.omit(sum(dp$dataQL$pcl5i8>2 |
+  dp$dataQL$pcl5i9>2))
+
+dp$dataQL$pcl5i8[1]
+
+
+#for(i in 1:100){
+#    if(sum(
+#        sum(dp$dataQL$pcl5i8[i]>=2)))
+        #+
+        #sum(dp$dataQL$pcl5i9[i]>=2) +
+        #sum(dp$dataQL$pcl5i10[i]>=2)+ 
+        #sum(dp$dataQL$pcl5i11[i]>=2)+ 
+        #sum(dp$dataQL$pcl5i12[i]>=2)+ 
+        #sum(dp$dataQL$pcl5i13[i]>=2)+
+        #sum(dp$dataQL$pcl5i14[i]>=2))>=2) 
+#    {
+#  print("TRUE")
+#}
+#    else{
+#      print("FALSE")
+#    }
+#}
+  
+for(i in 1:100){
+  if(is.na(dp$dataQL$pcl5i8[i]))
+  {
+    cat(i, "NA", sep = "")
+  }
+  else{if(dp$dataQL$pcl5i8[i]>=2)
+    #+
+    #sum(dp$dataQL$pcl5i9[i]>=2) +
+    #sum(dp$dataQL$pcl5i10[i]>=2)+ 
+    #sum(dp$dataQL$pcl5i11[i]>=2)+ 
+    #sum(dp$dataQL$pcl5i12[i]>=2)+ 
+    #sum(dp$dataQL$pcl5i13[i]>=2)+
+    #sum(dp$dataQL$pcl5i14[i]>=2))>=2) 
+  {
+    cat(i,"TRUE", sep="")
+  }
+  else{
+    cat(i, "FALSE", sep="")
+  }
+  
+  }
+}
+
+#data.table(,
+#           for(i in 1:10){
+#             if(is.na(dp$dataQL$pcl5i8[i]))
+#             {
+#               ("NA")
+#             }
+#           else{if(
+#                 dp$dataQL$pcl5i8[i]>=2)+
+#             (dp$dataQL$pcl5i9[i]>=2) +
+#             (dp$dataQL$pcl5i10[i]>=2)+ 
+#             (dp$dataQL$pcl5i11[i]>=2)+ 
+#             (dp$dataQL$pcl5i12[i]>=2)+ 
+#             (dp$dataQL$pcl5i13[i]>=2)+
+#             (dp$dataQL$pcl5i14[i]>=2))>=2) 
+#           {
+#             "TRUE"
+#           }
+#             else{
+#             "FALSE"
+#             }
+#             
+#           }
+#           }
+#)
+
+#for(i in 1:10){
+#  data.table[, paste0()]
+#}
+
+```
+
+```{r echo=TRUE, message=TRUE, warning=TRUE}
+
+#This code takes the data from dp$dataQL and looks at the PCL5 data, and determines if the participant meets criteria for provisional PTSD diagnosis according to this statement: A provisional PTSD diagnosis can be made by treating each item rated as 2 = "Moderately" or higher as a symptom endorsed, then following the DSM-5 diagnostic rule which requires at least: 1 B item (questions 1-5), 1 C item (questions 6-7), 2 D items (questions 8-14), 2 E items (questions 15-20).
+
+library(data.table)
+BLdata<-dp$dataQL[VisitID=="BL"]
+BLstni<-(na.omit(BLdata$stniTotal))
+y<-data.table()
+
+for (i in 1:3415)
+{
+ tmp<- if(anyNA(c(
+   dp$dataQL$pcl5i1[i],
+   dp$dataQL$pcl5i2[i],
+   dp$dataQL$pcl5i3[i],
+   dp$dataQL$pcl5i4[i],
+   dp$dataQL$pcl5i5[i],
+   dp$dataQL$pcl5i6[i],
+   dp$dataQL$pcl5i7[i],
+   dp$dataQL$pcl5i8[i],
+   dp$dataQL$pcl5i9[i],
+   dp$dataQL$pcl5i10[i],
+   dp$dataQL$pcl5i11[i],
+   dp$dataQL$pcl5i12[i],
+   dp$dataQL$pcl5i13[i],
+   dp$dataQL$pcl5i14[i],
+   dp$dataQL$pcl5i15[i],
+   dp$dataQL$pcl5i16[i],
+   dp$dataQL$pcl5i17[i],
+   dp$dataQL$pcl5i18[i],
+   dp$dataQL$pcl5i19[i],
+   dp$dataQL$pcl5i20[i])))
+  {
+    (NA)
+  }
+  else{
+    if (((((sum(
+    sum(dp$dataQL$pcl5i1[i]>=2)+
+    sum(dp$dataQL$pcl5i2[i]>=2)+
+    sum(dp$dataQL$pcl5i3[i]>=2)+
+    sum(dp$dataQL$pcl5i4[i]>=2)+
+    sum(dp$dataQL$pcl5i5[i]>=2)))>=1)&
+  ((sum(
+    sum(dp$dataQL$pcl5i6[i]>=2)+  
+    sum(dp$dataQL$pcl5i7[i]>=2)))>=1))&
+  ((sum(
+    sum(dp$dataQL$pcl5i8[i]>=2)+
+    sum(dp$dataQL$pcl5i9[i]>=2)+
+    sum(dp$dataQL$pcl5i10[i]>=2)+ 
+    sum(dp$dataQL$pcl5i11[i]>=2)+ 
+    sum(dp$dataQL$pcl5i12[i]>=2)+ 
+    sum(dp$dataQL$pcl5i13[i]>=2)+
+    sum(dp$dataQL$pcl5i14[i]>=2)))>=2))&
+  ((sum(
+    sum(dp$dataQL$pcl5i15[i]>=2)+
+    sum(dp$dataQL$pcl5i16[i]>=2)+
+    sum(dp$dataQL$pcl5i17[i]>=2)+ 
+    sum(dp$dataQL$pcl5i18[i]>=2)+ 
+    sum(dp$dataQL$pcl5i19[i]>=2)+ 
+    sum(dp$dataQL$pcl5i20[i]>=2)))>=2))
+    {
+     (TRUE)
+    }
+      else{
+        (FALSE)
+          }
+       }   
+   
+ y<- rbind(y, tmp)
+}
+
+y[, ':=' (PtID = dp$dataQL$PtID,
+          VisitID = dp$dataQL$VisitID,
+          trel = dp$dataQL$trelative,
+          int1 = between(dp$dataQL$trelative, 80, 100),
+          int2 = between(dp$dataQL$trelative, 160, 200),
+          stniTotal=dp$dataQL$stniTotal,
+          stni9total=dp$dataQL$stni9total,
+          isiTotal= dp$dataQL$isi_total,
+          pcl5total = dp$dataQL$pcl5total,
+          pclB = dp$dataQL$pcl5clusterB,
+          pclC = dp$dataQL$pcl5clusterC,
+          pclD = dp$dataQL$pcl5clusterD,
+          pclE = dp$dataQL$pcl5clusterE,
+          ceaptwTotal = dp$dataQL$ceaPTW_total,
+          phq9Total = dp$dataQL$phq9total,
+          gad7Total = dp$dataQL$gad7total,
+          stnimini = (dp$dataQL$stni1 + dp$dataQL$stni2 + dp$dataQL$stni3 + dp$dataQL$stni4 + dp$dataQL$stni5 + dp$dataQL$stni6 + dp$dataQL$stni11a),
+          stni1=dp$dataQL$stni1,
+          stni2=dp$dataQL$stni2,
+          stni3=dp$dataQL$stni3,
+          stni4=dp$dataQL$stni4,
+          stni5=dp$dataQL$stni5,
+          stni6=dp$dataQL$stni6,
+          stni7=dp$dataQL$stni7,
+          stni8=dp$dataQL$stni8,
+          stni9=dp$dataQL$stni9,
+          stni10a=dp$dataQL$stni10a,
+          stni11a=dp$dataQL$stni11a,
+          age=dp$dataQL$age,
+          gender=dp$dataQL$gender,
+          race=dp$dataQL$raceConcatenated,
+          ethnicity=dp$dataQL$ethnicityConcatenated
+          
+          )
+          ]#,
+          #pcl5i1 = dp$dataQL$pcl5i1,
+          #pcl5i2 = dp$dataQL$pcl5i2,
+          #pcl5i3 = dp$dataQL$pcl5i3,
+          #pcl5i4 = dp$dataQL$pcl5i4,
+          #pcl5i5 = dp$dataQL$pcl5i5,
+          #pcl5i6 = dp$dataQL$pcl5i6,
+          #pcl5i7 = dp$dataQL$pcl5i7,
+          #pcl5i8 = dp$dataQL$pcl5i8,
+          #pcl5i9 = dp$dataQL$pcl5i9,
+          #pcl5i10 = dp$dataQL$pcl5i10,
+          #pcl5i11 = dp$dataQL$pcl5i11,
+          #pcl5i12 = dp$dataQL$pcl5i12,
+          #pcl5i13 = dp$dataQL$pcl5i13,
+          #pcl5i14 = dp$dataQL$pcl5i14,
+          #pcl5i15 = dp$dataQL$pcl5i15,
+          #pcl5i16 = dp$dataQL$pcl5i16,
+          #pcl5i17 = dp$dataQL$pcl5i17,
+          #pcl5i18 = dp$dataQL$pcl5i18,
+          #pcl5i19 = dp$dataQL$pcl5i19,
+          #pcl5i20 = dp$dataQL$pcl5i20)]
+
+     #int1 = between(y$trel, 80, 100)
+     #int2 = between(y$trel, 160, 200)
+
+  #y<- rbind(y, int1)
+
+
+#Plot for BL pcl Scores
+ggplot(y[VisitID=="BL"], aes(x=(pcl5total)))+geom_histogram()
+#plot for BL PTSD ratio
+ggplot(na.omit(y[VisitID=="BL"]), aes(x=x))+geom_bar()
+#y[,':='(pcl5i1 = data.table(dp$dataQL$pcl5i1))]
+library(ggplot2)
+#ggplot(y[VisitID=="BL"], aes(x=pcl5total))+geom_histogram(bins=79)
+#ggplot(y, aes(x=pcl5total))+geom_histogram(bins=79)
+
+#ggplot(y, aes(x=phq9Total))+geom_histogram(bins=28)
+
+ggplot(y, aes(x=gad7Total))+geom_histogram(bins=22)
+
+ggplot(y, aes(x=ceaptwTotal))+geom_histogram(bins=37)
+
+ggplot(y, aes(x=stniTotal))+geom_histogram(bins=35)
+# revised df for y
+int <- y[int1=="TRUE"|int2=="TRUE"][VisitID=="OO3mo"]
+
+int[,':=' (timep = as.character(as.integer(int$int2)))]
+
+
+ggplot(data= int[int1==TRUE], mapping = aes(x=stniTotal, y=pcl5total))+geom_point()
+ggplot(data= int[int2==TRUE], mapping = aes(x=stniTotal, y=pcl5total))+geom_point()
+
+
+ggplot(data= int[int1==TRUE], mapping = aes(x=stniTotal, y=pcl5total))+geom_point()
+
+#PCL5 and STNI correlation
+#ggplot(data = int)+geom_point(int[int1==TRUE], mapping = aes(x=stniTotal, y=pcl5total), color="blue", alpha=.2) + geom_point(int[int2==TRUE], mapping = aes(x=stniTotal, y=pcl5total), color="red", alpha=.2)
+
+#ggplot(data=int)+geom_point(int, mappping = aes(x=stniTotal, y=pcl5total), color = int$timep)
+
+#ggplot(data=int, aes(x=stniTotal, y=pcl5total, color=int$timep))+geom_point(alpha=0.6)
+#THIS ONE ACTUALLY WORKS WITH LABEL, STNI + PCL
+ggplot(data=int, aes(x=stniTotal, y=pcl5total, color = factor(int$timep, labels = c("3mo","6mo"))))+geom_point(alpha=0.6, position="jitter")+labs(color="Time frame")
+#STNI AND ISI
+ggplot(data=int, aes(x=stniTotal, y=isiTotal, color = factor(int$timep, labels = c("3mo","6mo"))))+geom_point(alpha=0.6, position="jitter")+labs(color="Time frame")
+
+
+#for ISI and STNI correlation
+#ggplot(data = int)+geom_point(int[int1==TRUE], mapping = aes(x=stniTotal, y=isitotal), color="blue", alpha=.2) + geom_point(int[int2==TRUE], mapping = aes(x=stniTotal, y=isitotal), color="red",alpha = .3, labels="int2")+labs(color="int2")
+
+
+nint2<-int[int2==TRUE]
+nint1<-int[int1==TRUE]
+
+#cor(nint1$stniTotal, nint1$pcl5total, use="complete.obs")
+#length(nint2$stniTotal) <- length(nint1$stniTotal)
+#length(nint2$pcl5total) <- length(nint1$pcl5total)
+
+#ggplot(nint1, aes(x=stniTotal))+geom_histogram()
+#given cutoff of 33 for PCL, proportionally equivalent to a score of 14 on the stni9Total, or 13 if cutoff is 31
+
+ggplot(dp$dataQL[VisitID=="BL"], aes(x=pclTotal)) + geom_histogram(bins=34)
+#data.table(dp$dataQL$pcl5i1)
+```
+
+
+```{r}
+
+#This is for making graphs/figures for STNI validation paper
+#install.packages("patchwork")
+library(patchwork)
+install.packages("grid")
+library(grid)
+
+plot1<-ggplot(data=y[VisitID=="BL"], aes(x=stniTotal, y=pcl5total)) + geom_point(alpha=.2, position=position_jitter(height=.5, width=.5)) + geom_smooth(method="lm") + stat_cor(method="pearson", label.x=15, label.y=5)+theme_classic()+xlab("STNI Total Score")+ylab("PCL-5 Total Score")
+
+plot2<-ggplot(data=y[VisitID=="BL"], aes(x=stniTotal, y=isiTotal)) + geom_point(alpha=.2, position=position_jitter(height=.5, width=.5)) + geom_smooth(method="lm") + stat_cor(method="pearson", label.x=10, label.y=30)+theme_classic()+xlab("STNI Total Score")+ylab("ISI Total Score")
+
+plot3<-ggplot(data=y[VisitID=="BL"], aes(x=stniTotal, y=phq9Total)) + geom_point(alpha=.2, position=position_jitter(height=.5, width=.5)) + geom_smooth(method="lm") + stat_cor(method="pearson", label.x=10, label.y=30)+theme_classic()+xlab("STNI Total Score")+ylab("PHQ-9 Total Score")
+
+plot4<-ggplot(data=y[VisitID=="BL"], aes(x=stniTotal, y=gad7Total)) + geom_point(alpha=.2, position=position_jitter(height=.5, width=.5))+ geom_smooth(method="lm") + stat_cor(method="pearson", label.x=10, label.y=30)+theme_classic()+xlab("STNI Total Score")+ylab("GAD-7 Total Score")
+
+
+plot1=plot1+labs(tag="A")
+plot2=plot2+labs(tag="B")
+plot3=plot3+labs(tag="C")
+plot4=plot4+labs(tag="D")
+
+stnicor <- plot1 + plot2 + plot3 + plot4
+
+ggsave(paste0(importdirectories$plotsaves,saveoptions$savetag,"_STNI Correlations.jpeg"), stnicor, width=10, height=9, units="in",dp=600)
+#ml <- grid.arrange(grobs=list(plot1, plot2, plot3, plot4), nrow=2, ncol=4,widths=c(.4,.4,.4,.4))
+#ggplot(data=y[VisitID=="BL"], aes(x=stniTotal, y=ceaptwTotal)) + geom_point() + geom_smooth(method="lm") + stat_cor(aes(label=..rr.label..), #label.x=30, label.y=30)
+```
+
+```{r}
+
+#this is to try and compare results from 3mo and 6mo interal
+####################################################CHECK FOR NEW DATA PULL ACCURACY####################################################
+#between(y$trel, 80, 100)
+#between(y$trel, 160, 200)
+
+# =(y[int2=="TRUE"][VisitID=="OO3mo"])
+#mo1 =(y[int1=="TRUE"][VisitID=="OO3mo"])
+
+int <- y[int1=="TRUE"|int2=="TRUE"][VisitID=="OO3mo"]
+
+dif <- y[int1=="TRUE"|int2=="TRUE"][VisitID=="OO3mo"]
+#stnimo1 = mo1$stniTotal
+#pclmo1 = mo1$pcl5total
+#plot(stnimo1,pclmo1)
+
+#stnimo2= mo2$stniTotal
+#pclmo2=mo2$pcl5total
+#plot(stnimo2, pclmo2)
+
+#dupe<-as.numeric(factor(int$PtID))
+#int[,dupe:=NULL]
+int[,':='(dupe=as.numeric(factor(int$PtID)))]
+anyDuplicated(as.numeric(factor(int$PtID)))
+  rem <-c(2, 7, 9, 10, 13, 14, 18, 19, 20, 21, 24, 25, 26, 27, 28, 29, 30, 34, 35, 36, 38, 39, 40, 41, 44, 46, 47, 48, 49, 52, 55, 59, 63, 64, 66, 69, 70, 76, 78,79,80,81,83,84,85,88,91,92,93,95,96,97,98,100,101,103,104,107,108,109,110,111,113,115,116,117,118,119,120,122,124,125,126,128,129,130,131,132,133,134,136,137,138,139,140,141,142,143,144,145,146,148,151,153,154,155,156,158,161,163,167,168,169,170,171,178,182,183,185,186,187,188,189,191,192,193,194,195,197,198,199,203,205,207,209,216,223,225,230,231,232,233,234,235,236,237,238,239,240,244,245,250,252,253,254,255,257,258,259,260,263,266)
+#for(rem in int$dupe)
+
+#int[dupe]  
+
+#for (i in 1:390){
+#  idk1<-if(any(int$dupe[i]==rem)){
+#    print(i)
+#  }
+#}
+#int <- rbind(int,idk1)  
+#I think this is the one that works to say which rows are not paired
+ppl2 <- character()
+for (i in 1:390){
+  ppl<- any(int$dupe[i]==rem)
+  ppl2<-c(ppl2, ppl)
+  }
+ppl2 <-as.logical(ppl2)
+#int[,':='(paired=NULL)]
+int[,':='(paired = !ppl2)] 
+
+(int[paired==TRUE]$stniTotal)
+#These diffs aren't actually correct, need to find a way to find diff of every two paired points but without any non-paired points. Nrow should be half of int
+
+abs(diff((int[paired==TRUE]$stniTotal)))
+
+#for (i in 1:271){
+#  if (sum((factor(int$dupe)==i))!=2)
+#      {
+#      remove <- data.table(which(factor(int$dupe)==i))
+#  }
+#}
+
+#diffs in STNI mini
+#MAY BE AN ISSUE SINCE ORDER OF INT1 and INT2 MAY BE OFF, MAY MESS UP NAs
+#ACTUALLY NO I DONT THINK SO, IT SKIPS EVERY OTHER ONE BECAUSE THE DIFF FUNCTION COMPARES EVERY SUBSEQUENT SET OF TWO, WHICH ISN'T IMPORTANT FOR THIS SINCE WE'RE ONLY LOOKING AT PAIRED ITEMS, DON'T NEED TO LOOK AT DIFFERENCES BETWEEN NON-PAIRED ITEMS
+stnimdiff <- diff((int[paired==TRUE]$stnimini))
+stnimdiff <- stnimdiff[c(TRUE,FALSE)]
+#diffs in STNI
+stnidiff<-diff((int[paired==TRUE]$stni9total))
+
+stnidiff<- stnidiff[c(TRUE, FALSE)]
+#diffs in PCL5
+pcldiff<-diff(int[paired==TRUE]$pcl5total)
+pcldiff<- pcldiff[c(TRUE, FALSE)]
+
+#diffs in ISI
+isidiff<-diff((int[paired==TRUE]$isiTotal))
+isidiff<-isidiff[c(TRUE,FALSE)]
+#diffs in PCL5E
+pclediff <- diff(int[paired==TRUE]$pclE)
+pclediff<- pclediff[c(TRUE,FALSE)]
+#diffs in PCL5B
+pclbdiff <- diff(int[paired==TRUE]$pclB)
+pclbdiff<- pclbdiff[c(TRUE,FALSE)]
+#diffs in PCL5C
+pclcdiff <- diff(int[paired==TRUE]$pclC)
+pclcdiff<- pclcdiff[c(TRUE,FALSE)]
+#diffs in PCL5D
+pclddiff <- diff(int[paired==TRUE]$pclD)
+pclddiff<- pclddiff[c(TRUE,FALSE)]
+#diffs in gad7
+gad7diff<-diff(int[paired==TRUE]$gad7Total)
+gad7diff<-gad7diff[c(TRUE,FALSE)]
+#diffs in phq9
+phq9diff <- diff(int[paired==TRUE]$phq9Total)
+phq9diff <- phq9diff[c(TRUE,FALSE)]
+#diffs in occupational exposure
+ceaptwdiff<- diff(int[paired==TRUE]$ceaptwTotal)
+ceaptwdiff<- ceaptwdiff[c(TRUE, FALSE)]
+diffs = data.table(stnidiff, pcldiff, pclbdiff, pclcdiff, pclddiff, pclediff, isidiff, gad7diff, phq9diff, ceaptwdiff)
+#diffs = data.table(stnidiff<-abs(diff((int[paired==TRUE]$stniTotal))),pcldiff<-abs(diff((int[paired==TRUE]$pcl5total))))
+#diffs[,dupe:=(int[paired==TRUE]$dupe)]
+ggplot(diffs, aes(x=stnidiff, y=pcldiff))+geom_point()
+ggplot(diffs, aes(x=stnidiff, y=isidiff))+geom_point()
+ggplot(diffs, aes(x=stnidiff, y=gad7diff))+geom_point()
+ggplot(diffs, aes(x=stnidiff, y=phq9diff))+geom_point()
+ggplot(diffs, aes(x=stnidiff, y=ceaptwdiff))+geom_point()
+#ggplot(diffs, aes(x=stnidiff, y=pclediff))+geom_point()
+#STNI mini diff corr with other sclaes
+cor.test(stnidiff, pcldiff, use="complete.obs")
+cor.test(stnidiff, isidiff, use="complete.obs")
+cor.test(stnidiff, gad7diff, use="complete.obs")
+cor.test(stnidiff, phq9diff, use="complete.obs")
+cor.test(stnidiff, ceaptwdiff, use="complete.obs")
+#Stni diff corr with other scales
+cor.test(stnidiff, pcldiff, use="complete.obs")
+cor.test(stnidiff, isidiff, use="complete.obs")
+cor.test(stnidiff, gad7diff, use="complete.obs")
+cor.test(stnidiff, phq9diff, use="complete.obs")
+cor.test(stnidiff, ceaptwdiff, use="complete.obs")
+#Pretty much the same
+
+#Baseline total correlations
+cor.test(y[VisitID=="BL"]$stniTotal, y[VisitID=="BL"]$pcl5total, use="complete.obs")
+cor.test(stnidiff, isidiff, use="complete.obs")
+cor.test(stnidiff, gad7diff, use="complete.obs")
+cor.test(stnidiff, phq9diff, use="complete.obs")
+cor.test(stnidiff, ceaptwdiff, use="complete.obs")
+
+#Some cors with age
+cor.test(dp$dataQL$age, dp$dataQL$stni9total, use="complete.obs")
+#cor.test(dp$dataQL$age, dp$dataQL$pcl5total, use="complete.obs")
+cor.test(dp$dataQL$age, dp$dataQL$gad7total, use="complete.obs")
+cor.test(dp$dataQL$age, dp$dataQL$phq9total, use="complete.obs")
+
+
+#STNI diff most correlated with PCL B, interestingly
+
+library(pROC)
+
+# Maps STNI positive rate to PCL5 positive rate
+
+#int[, ':='(diag = as.numeric(int$x)),by=1:nrow(int)]
+int[,diag:=as.numeric(x),by=1:nrow(int)]
+
+pROC<- roc(as.numeric(int$stni9total>13), int$diag, smoothed=TRUE, ci=TRUE, ci.alpha = 0.9, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+
+#int[, ':='(diag = as.numeric(y$x)),by=1:nrow(int)]
+
+#Cor of STNI with PCLB, quite strong at .73, less strong than stni as a whole though
+cor.test(y[VisitID=="BL"]$pclB, y[VisitID=="BL"]$stni9total, use="complete.obs")
+#More Cors
+cor.test(y[VisitID=="BL"]$stni9total, y[VisitID=="BL"]$pcl5total, use="complete.obs")
+cor.test(y[VisitID=="BL"]$stni9total, y[VisitID=="BL"]$isiTotal, use="complete.obs")
+
+int[,diag:=NULL]
+
+class(int$diag)
+#View(int)
+ggplot(int, aes(x=pcl5total, y=x))+geom_point()
+roc<- ci.se(pROC)
+plot(roc, type = "shape")
+```
+
+```{r}
+
+#Going to try another set of ROC curves here, since the other ones are kinda iffy
+
+#library(pROC)
+#install.packages("verification")
+#library(verification)
+#roc.plot(y$stniTotal, y$pcl5total)
+#roc()
+
+#library(ROCR)
+
+ #prediction(na.omit(y[VisitID=="BL"]$stni9total), na.omit(y[VisitID=="BL"]$pcl5total))
+
+```
+
+
+```{r}
+#This is to try and find ROC curve for STNI and PCL
+#install.packages("pROC")
+library(pROC)
+
+# Maps STNI positive rate to PCL5 positive rate
+
+#int[, ':='(diag = as.numeric(int$x)),by=1:nrow(int)]
+int[,diag:=as.numeric(x),by=1:nrow(int)]
+#This one takes positive STNI ruling and compares to postiive PCL5 diagnosis 
+#pROC<- roc(as.numeric(int$stniTotal>13), int$diag, smoothed=TRUE, ci=TRUE, ci.alpha = 0.9, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+#            print.auc=TRUE, show.thres=TRUE)
+
+#This one works??? Higher AUC than PSQI-A to detect PTSD (though PSQI-A used CAPS, STNI used PCL)
+pROC1<- roc(int$diag, int$stni9total, smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+#STNI score of 8 or greater yields highest sensitivity to specitivity ratio 
+pROC2<- roc(int$diag, as.numeric(int$stniTotal>8), smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE, ci.se=TRUE, ci.sp=TRUE)
+#STNI To ISI, quite good at predicting insomnia with a cutoff of 15
+pROC3<- roc(int$isiTotal>15, as.numeric(int$stni9total), smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE, ci.se=TRUE, ci.sp=TRUE)
+#STNI To ISI without repeats
+pROC3<- roc(as.numeric(int[int1==TRUE]$isiTotal>15), int[int1==TRUE]$stni9total, smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE, ci.se=TRUE, ci.sp=TRUE)
+
+ROC<- roc(int[int1==TRUE]$isiTotal>15, int[int1==TRUE]$stni9total, smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE, print.auc=TRUE, show.thres=TRUE)
+#This one works too??
+pROC4<- multiclass.roc(int$diag, int$stni9total,plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+#without repeats (DOUBLE CHECK PLEASE!!)**
+ROC<- roc(int[int1==TRUE]$diag, int[int1==TRUE]$stni9total, smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE, print.auc=TRUE, show.thres=TRUE)
+
+ROC<- roc(int[int2==TRUE]$diag, int[int2==TRUE]$stni9total, smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE,
+          max.auc.polygon=TRUE, grid=TRUE, print.auc=TRUE, show.thres=TRUE)
+
+
+#Baseline
+#For PCL-5
+ROC<- roc(as.numeric(y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal)==TRUE]$x), na.omit(y[VisitID=="BL"]$stniTotal), smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE, print.auc=TRUE, show.thres=TRUE)
+#For ISI
+ROC<- roc(as.numeric(y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal==TRUE)]$isiTotal>15), na.omit(y[VisitID=="BL"]$stniTotal), smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE, print.auc=TRUE, show.thres=TRUE)
+
+#ROC curve with STNI as response and PCL-5 as predictor
+
+ROC<- roc((na.omit(y[VisitID=="BL"]$stniTotal>14)), as.numeric(y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal)==TRUE]$pcl5total), smoothed=TRUE, ci=TRUE, stratified = FALSE, plot=TRUE, auc.polygon = TRUE, max.auc.polygon=TRUE, grid=TRUE, print.auc=TRUE, show.thres=TRUE)
+
+y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal)==TRUE]$isiTotal
+y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal==TRUE)]$isiTotal>15
+
+ci.thresholds(as.numeric(y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal==TRUE)]$x), na.omit(y[VisitID=="BL"]$stniTotal),thresholds=c(11))
+ci.thresholds((na.omit(y[VisitID=="BL"]$stniTotal>14)), as.numeric(y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal)==TRUE]$pcl5total), thresholds=c(34))
+#Check sensitivity and specificity 
+ci.thresholds(int[int1==TRUE]$diag, int[int1==TRUE]$stniTotal, thresholds=c(9))
+ci.thresholds(int[int2==TRUE]$diag, int[int2==TRUE]$stniTotal, thresholds=c(9))
+#Cutoff of 9 on the STNI seems to give the greatest sensitivity/specificity ratio
+ci.se(int[int1==TRUE]$diag, int[int1==TRUE]$stniTotal)
+#I don't know enough about ROC curves to be sure but it seems to make sense?
+```
+
+```{r}
+
+#TEST RETEST VALIDITY
+#Trying to get a set of paired tests of each unique participant, however running into issues where one of the pairs is NA
+#install.packages("knitr")
+
+#write.csv(int[paired==TRUE][int1==TRUE]$stniTotal)
+
+#write.csv(int[paired==TRUE][int2==TRUE]$stniTotal)
+
+#I guess can just do it manually??
+#Used CSV to get row numbers
+
+#remove 28, 39, 45, 48, 49, 57, 82, 109, 112, 21, 28, 44, 49, 51, 119
+sort(c(28, 39, 45, 48, 49, 57, 82, 109, 112, 21, 28, 44, 49, 51, 119))
+
+trt1<-int[paired==TRUE][int2==TRUE]$stni9total
+  trt1<- trt1[-c(28, 39, 45, 48, 49, 57, 82, 109, 112, 21, 28, 44, 49, 51, 119)]
+trt2<-int[paired==TRUE][int1==TRUE]$stni9total
+  trt2<- trt2[-c(28, 39, 45, 48, 49, 57, 82, 109, 112, 21, 28, 44, 49, 51, 119)]
+
+  #TRYING THE ABOVE BUT WITH STNI TOTAL INSTEAD OF STNI 9 TOTAL
+#write.csv(trt1t)
+#write.csv(is.na(trt2t))
+
+
+trt1t<-int[paired==TRUE][int2==TRUE]$stniTotal
+  trt1t<- trt1t[-c(8, 9, 13, 17, 19, 21, 24, 28, 39, 41, 42, 44, 46, 49, 51, 67, 78, 80, 81, 89, 103, 119, 5, 6, 20, 33, 63, 88, 91, 112, 109, 90, 82, 56, 57, 48, 45, 27)]
+trt2t<-int[paired==TRUE][int1==TRUE]$stniTotal
+  trt2t<- trt2t[-c(8, 9, 13, 17, 19, 21, 24, 28, 39, 41, 42, 44, 46, 49, 51, 67, 78, 80, 81, 89, 103, 119, 5, 6, 20, 33, 63, 88, 91, 112, 109, 90, 82, 56, 57, 48, 45, 27)]
+
+  #  , 5, 6, 20, 33, 63, 88, 91
+#trtBL <- dp$dataQL[VisitID=="BL"]$stniTotal
+# trtBL2 <- data.table()
+# y1=i
+# y2=dp$dataQL[VisitID=="BL"][PtID==paste("H", i, sep="")]$stni1
+#for (i in 1:827)
+#{
+#  
+#  trtBL2[,':=' (y1= y1,
+#               y2= y2)
+#        ]#
+
+#}
+# trtBL3 <- data.table()
+# for (i in 1:827)
+#{
+#  trtBL3[, ":="(y1 = paste("H", i, sep=""))]
+# }
+# 
+# trtBL = data.table()
+## for (i in 1:827)
+ #{
+#   op <-  paste("H", i, sep="")
+#   ops <- dp$dataQL[VisitID=="BL"]$stni9total
+#   trtBL <- rbind(trtBL, op)
+#   #trtBL <- rbind (trtBL, ops)
+# }
+# for (i in 1:827){
+# trtBL[, stniTotal := as.vector(dp$dataQL[VisitID=="BL"[PtID=="/""paste("H", i, sep="")"]$stni9total)]
+#}
+##dp$dataQL[VisitID=="BL"][PtID=="H25"]
+
+  #Uses ID numbers to pull stni scores
+  trtr <- data.frame()
+  for (i in 1:830)
+ {
+   trtrt <- dp$dataQL[PtID==paste("H",i,sep="")][VisitID=="BL"]$stni9total
+   trtr <- rbind(trtr, trtrt)
+  }
+  
+
+setDT(trtr)
+#Sets ID numbers in data frame
+trtrt <- data.table()
+  for (i in 1:830)
+  {
+    asd <- paste("H", i, sep="")
+    trtrt <- rbind(trtrt, asd)
+  }
+#Combines the two above into a single data table
+trtBL <- data.table(trtrt, trtr)
+colnames(trtBL) <- c("ID", "stni9total")
+
+#Adds stni scores from INT 1 to data table
+trtint1 <- data.table()
+for (i in 1:830)
+{
+  asdf <-  y[PtID==paste("H",i,sep="")][int1 == TRUE]$stni9total
+  trtint1 <- rbind(trtint1, asdf)
+}
+#Adds IDs from INT1 to data frame
+trtint2 <- data.table()
+for (i in 1:830)
+{
+  asdf <-  y[PtID==paste("H",i,sep="")][int1 == TRUE]$PtID
+  trtint2 <- rbind(trtint2, asdf)
+}
+
+trtBL2 <- data.table()
+for (i in 1:235)
+{
+aw<- trtBL[ID==trtint2$x[i]]
+trtBL2 <- rbind(trtBL2, aw)
+}
+
+trtBLINT<-data.table(trtBL2, trtint1) #double check
+colnames(trtBLINT)<- c("ID", "BL", "Int1")
+trtBLINT <- na.omit(trtBLINT)
+
+
+#TRYING THE ABOVE BUT WITH STNI TOTAL INSTEAD OF STNI 9
+  #Uses ID numbers to pull stni scores
+  trtr <- data.frame()
+  for (i in 1:830)
+ {
+   trtrt <- dp$dataQL[PtID==paste("H",i,sep="")][VisitID=="BL"]$stniTotal
+   trtr <- rbind(trtr, trtrt)
+ }
+setDT(trtr)
+#Sets ID numbers in data frame
+trtrt <- data.table()
+  for (i in 1:830)
+  {
+    asd <- paste("H", i, sep="")
+    trtrt <- rbind(trtrt, asd)
+  }
+#Combines the two above into a single data table
+trtBL <- data.table(trtrt, trtr)
+colnames(trtBL) <- c("ID", "stniTotal")
+trtint1 <- data.table()
+for (i in 1:830)
+{
+  asdf <-  y[PtID==paste("H",i,sep="")][int1 == TRUE]$stniTotal
+  trtint1 <- rbind(trtint1, asdf)
+}
+#Adds IDs from INT1 to data frame
+trtint2 <- data.table()
+for (i in 1:830)
+{
+  asdf <-  y[PtID==paste("H",i,sep="")][int1 == TRUE]$PtID
+  trtint2 <- rbind(trtint2, asdf)
+}
+
+trtBL2 <- data.table()
+for (i in 1:235)l
+{
+aw<- trtBL[ID==trtint2$x[i]]
+trtBL2 <- rbind(trtBL2, aw)
+}
+
+trtBLINT<-data.table(trtBL2, trtint1) #double check
+colnames(trtBLINT)<- c("ID", "BL", "Int1")
+trtBLINT <- na.omit(trtBLINT)
+
+#Correlations
+trtINT<- data.table(trt1t, trt2t)
+colnames(trtINT)<- c ("int1", "int2")
+#This should give us our test retest validity
+cor.test(trt1t, trt2t)
+
+
+cor.test(trtBLINT$BL, trtBLINT$Int1) #Double check
+
+plotINT<-ggplot(data=trtINT, aes(x=int1, y=int2)) + geom_point(alpha=.2, position=position_jitter(height=.5, width=.5)) + geom_smooth(method="lm") + stat_cor(method="pearson", label.x=18, label.y=35)+labs(y= "6-month STNI Score", x = "3-month STNI Score") +theme_classic()
+
+plotBLINT<- ggplot(data=trtBLINT, aes(x=BL, y=Int1)) + geom_point(alpha=.2, position=position_jitter(height=.5, width=.5)) + geom_smooth(method="lm") + stat_cor(method="pearson", label.x=20, label.y=31)+labs(y= "3-month STNI Score", x = "Baseline STNI Score")+theme_classic()
+
+plotTRT<- plotBLINT + plotINT
+
+ggsave(paste0(importdirectories$plotsaves,saveoptions$savetag,"_Test Re-test.jpeg"), plotTRT, width=10, height=5, units="in",dp=600)
+
+
+```
+
+```{r}
+#Trying out Convergent and Discriminate Validity 
+#install.packages("psy")
+library(psy)
+#Following is for CFA
+#install.packages("foreign", dependencies = TRUE)
+#install.packages("lavaan", dependencies = TRUE)
+library(foreign)
+library(lavaan)
+ 
+
+```
+```{r}
+bl <- data.table()
+bl[, ':=' (PtID = dp$dataQL[VisitID=="BL"]$PtID,
+          #VisitID = dp$dataQL$VisitID,
+          #trel = dp$dataQL$trelative,
+          #int1 = between(dp$dataQL$trelative, 80, 100),
+          #int2 = between(dp$dataQL$trelative, 160, 200),
+          stni9total=dp$dataQL[VisitID=="BL"]$stni9total,
+          isiTotal= dp$dataQL[VisitID=="BL"]$isi_total,
+          pcl5total = dp$dataQL[VisitID=="BL"]$pcl5total,
+          pclB = dp$dataQL[VisitID=="BL"]$pcl5clusterB,
+          pclC = dp$dataQL[VisitID=="BL"]$pcl5clusterC,
+          pclD = dp$dataQL[VisitID=="BL"]$pcl5clusterD,
+          pclE = dp$dataQL[VisitID=="BL"]$pcl5clusterE,
+          ceaptwTotal = dp$dataQL[VisitID=="BL"]$ceaPTW_total,
+          phq9Total = dp$dataQL[VisitID=="BL"]$phq9total,
+          gad7Total = dp$dataQL[VisitID=="BL"]$gad7total)
+          #stnimini = (dp$dataQL$stni1 + dp$dataQL$stni2 + dp$dataQL$stni3 + dp$dataQL$stni4 + dp$dataQL$stni5 + dp$dataQL$stni6 + dp$dataQL$stni11a))
+          ]#,
+          #pcl5i1 = dp$dataQL$pcl5i1,
+          #pcl5i2 = dp$dataQL$pcl5i2,
+          #pcl5i3 = dp$dataQL$pcl5i3,
+          #pcl5i4 = dp$dataQL$pcl5i4,
+          #pcl5i5 = dp$dataQL$pcl5i5,
+          #pcl5i6 = dp$dataQL$pcl5i6,
+          #pcl5i7 = dp$dataQL$pcl5i7,
+          #pcl5i8 = dp$dataQL$pcl5i8,
+          #pcl5i9 = dp$dataQL$pcl5i9,
+          #pcl5i10 = dp$dataQL$pcl5i10,
+          #pcl5i11 = dp$dataQL$pcl5i11,
+          #pcl5i12 = dp$dataQL$pcl5i12,
+          #pcl5i13 = dp$dataQL$pcl5i13,
+          #pcl5i14 = dp$dataQL$pcl5i14,
+          #pcl5i15 = dp$dataQL$pcl5i15,
+          #pcl5i16 = dp$dataQL$pcl5i16,
+          #pcl5i17 = dp$dataQL$pcl5i17,
+          #pcl5i18 = dp$dataQL$pcl5i18,
+          #pcl5i19 = dp$dataQL$pcl5i19,
+          #pcl5i20 = dp$dataQL$pcl5i20)]
+
+     #int1 = between(y$trel, 80, 100)
+     #int2 = between(y$trel, 160, 200)
+
+```
+
+
+```{r}
+#this is for calculating ROC curve of STNI graph (I guess)
+#install.packages("ROCR")
+#library(ROCR)
+
+
+#int[, ':='(diag = as.numeric(y$x)),by=1:nrow(int)]
+
+
+int[,diag:=NULL]
+
+class(int$diag)
+#View(int)
+ggplot(int, aes(x=pcl5total, y=x))+geom_point()
+roc<- ci.se(pROC)
+plot(roc, type = "shape")
+```
+
+```{r}
+
+#This is so I can figure out demographics for the STNI Results
+dems <- data.table(dp$dataQL[VisitID=="BL"]$PtID, dp$dataQL[VisitID=="BL"]$stniTotal, dp$dataQL[VisitID=="BL"]$gender, dp$dataQL[VisitID=="BL"]$raceConcatenated, dp$dataQL[VisitID=="BL"]$ethnicityConcatenated, dp$dataQL[VisitID=="BL"]$age)
+
+colnames(dems)<-c("ID", "STNI", "Gender", "Race", "Ethnicity", "Age")
+
+stnidems <- data.table(dems[is.na(dems$STNI)==FALSE]$ID, dems[is.na(dems$STNI)==FALSE]$STNI,dems[is.na(dems$STNI)==FALSE]$Gender, dems[is.na(dems$STNI)==FALSE]$Race, dems[is.na(dems$STNI)==FALSE]$Ethnicity, dp$dataQL[VisitID=="BL"]$age)
+colnames(stnidems)<-c("ID", "STNI", "Gender", "Race", "Ethnicity", "Age")
+
+sum(na.omit(stnidems$Gender=="F"))
+sum(na.omit(stnidems$Gender=="M"))
+sum(na.omit(stnidems$Gender=="NB"))
+sum(na.omit(stnidems$Gender=="O"))
+
+sum(na.omit(stnidems$Race==1))
+sum(na.omit(stnidems$Race==2))
+sum(na.omit(stnidems$Race==3))
+sum(na.omit(stnidems$Race==4))
+sum(na.omit(stnidems$Race==5))
+sum(na.omit(stnidems$Race==6))
+length(na.omit(stnidems$Race))
+
+sum(na.omit(stnidems$Ethnicity==2))
+
+
+#This is a data.table that includes only BL entries that have STNI total responses. Useful for demographics 
+stniBL<-dp$dataQL[VisitID=="BL"][!is.na(dp$dataQL[VisitID=="BL"]$stniTotal==TRUE)]
+
+#same for PCL-5 diagnosis
+pcldems <- y[VisitID=="BL"][!is.na(y[VisitID=="BL"]$stniTotal==TRUE)]
+pcltrue<-pcldems[x==TRUE]
+pclfalse<-pcldems[x==FALSE]
+pcltrue$gad
+
+mean(na.omit(pcltrue$stni1))
+ sd(na.omit(pcltrue$stni1))
+mean(na.omit(pclfalse$stni1))
+ sd(na.omit(pclfalse$stni1))
+ 
+ 
+sapply(pclfalse, function(x){
+  if(is.numeric(x)){
+    sd(x, na.rm=TRUE)
+  }else{
+    NA
+  }
+})
+
+
+
+```
+```{r}
+
+cronbach.alpha(na.omit(data.table(dp$dataQL[VisitID=="BL"]$stni1, dp$dataQL[VisitID=="BL"]$stni2, dp$dataQL[VisitID=="BL"]$stni3, dp$dataQL[VisitID=="BL"]$stni4, dp$dataQL[VisitID=="BL"]$stni5, dp$dataQL[VisitID=="BL"]$stni6, dp$dataQL[VisitID=="BL"]$stni7, dp$dataQL[VisitID=="BL"]$stni8, dp$dataQL[VisitID=="BL"]$stni9, dp$dataQL[VisitID=="BL"]$stni10a, dp$dataQL[VisitID=="BL"]$stni11a)), CI=TRUE)
+
+cronbach.alpha(na.omit(data.table(dp$dataQL[VisitID=="BL"]$stni1, dp$dataQL[VisitID=="BL"]$stni2, dp$dataQL[VisitID=="BL"]$stni3, dp$dataQL[VisitID=="BL"]$stni4, dp$dataQL[VisitID=="BL"]$stni5, dp$dataQL[VisitID=="BL"]$stni6, dp$dataQL[VisitID=="BL"]$stni7, dp$dataQL[VisitID=="BL"]$stni10a, dp$dataQL[VisitID=="BL"]$stni11a)), CI=TRUE)
+
+```
+
+```{r}
+#(dp$dataQL[VisitID=="BL"][is.na(dp$dataQL[VisitID=="BL"]$stniTotal)==FALSE])->stniind
+#(y[VisitID=="BL"][is.na(y[VisitID=="BL"]$stniTotal)==FALSE])->stniindy
+
+#CODE FOR QUARTILE OVER TIME PLOT
+# For individual people over time:
+#prepforquintiles=function(dp,touse){
+#  dtt=dp$dataQL[PtID%in%dp$dataQL$PtID][trelative>=0,.(PtID,VisitID,trelative,ceaPTW_total,pcl5total,phq9total,gad7tota#l,isi_total,work,infield,phq9i9)]
+#  dtt[,this:=get(touse)]
+#  # group by quartiles
+#  scores=sort(dtt[VisitID=="BL"][!is.na(this)]$this)
+#  b1=scores[round(length(scores)*1/5)]
+#  b2=scores[round(length(scores)*2/5)]
+#  b3=scores[round(length(scores)*3/5)]
+#  b4=scores[round(length(scores)*4/5)]
+#  qmap=dtt[VisitID=="BL",.(PtID,this)]
+#  qmap[,Q:="5th"]
+#  qmap[this>b1,Q:="4th"]
+#  qmap[this>b2,Q:="3rd"]
+#  qmap[this>b3,Q:="2nd"]
+#  qmap[this>b4,Q:="1st"]
+#  dtt=merge(dtt,qmap[,.(PtID,Q)],by="PtID")
+##  return(dtt)
+#}#
+
+#touse="pcl5total"
+#dtt=prepforquintiles(dp,touse)
+#threshold=as.numeric(subfromkey(touse,c("pcl5total","phq9total","gad7total","isi_total","phq9i9"),c(31,5,5,15,1)))
+#axislabel=subfromkey(touse,c("pcl5total","phq9total","gad7total","isi_total"),paste0(c("PTSD","Depression","Anxiety","I#nsomnia","Thoughts of suicide or self-harm")," Symptoms"))
+#pclvt=ggplot(data=dtt,aes(x=trelative,y=this,color=Q))+
+#  geom_point(alpha=.5)+theme_pubr()+
+#  geom_hline(yintercept=threshold,linetype="dashed")+
+#  ylab(axislabel)+xlab("Days since baseline")+
+#  geom_smooth(span=1,method="loess",se=FALSE)+xlim(0,275)+
+#  guides(color=guide_legend(title="Quintile:"))
+
+#if(saveoptions$resave){
+#  w=8
+#  h=4
+#  ggsave(paste0(importdirectories$plotsaves,saveoptions$savetag,"_pclvt.jpeg"),
+#         pclvt,width=8,height=4,units="in",dp=600)
+#}
+
+
+# For individual people over time:
+prepforquintiles=function(dp,touse){
+  dtt=dp$dataQL[PtID%in%dp$dataQL$PtID][trelative>=0,.(PtID,VisitID,trelative,ceaPTW_total,stniTotal,phq9total,gad7total,isi_total,work)]
+  
+  dtt[,this:=get(touse)]
+  # group by quartiles
+  scores=sort(dtt[VisitID=="BL"][!is.na(this)]$this)
+  b1=scores[round(length(scores)*1/5)]
+  b2=scores[round(length(scores)*2/5)]
+  b3=scores[round(length(scores)*3/5)]
+  b4=scores[round(length(scores)*4/5)]
+  qmap=dtt[VisitID=="BL",.(PtID,this)]
+  qmap[,Q:="5th"]
+  qmap[this>b3,Q:="2nd"]
+  qmap[this>b1,Q:="4th"]
+  qmap[this>b2,Q:="3rd"]
+  qmap[this>b4,Q:="1st"]
+  dtt=merge(dtt,qmap[,.(PtID,Q)],by="PtID")
+  return(dtt)
+}
+
+touse="stniTotal"
+dtt=prepforquintiles(dp,touse)
+threshold=as.numeric(subfromkey(touse,c("pcl5total","phq9total","gad7total","isi_total","phq9i9"),c(31,5,5,15,1)))
+axislabel=subfromkey(touse,c("pcl5total","phq9total","gad7total","isi_total"),paste0(c("PTSD","Depression","Anxiety","Insomnia","Thoughts of suicide or self-harm")," Symptoms"))
+pclvt=ggplot(data=dtt,aes(x=trelative,y=this,color=Q))+
+  geom_point(alpha=.5)+theme_pubr()+
+  geom_hline(yintercept=threshold,linetype="dashed")+
+  ylab(axislabel)+xlab("Days since baseline")+
+  geom_smooth(span=1,method="loess",se=FALSE)+xlim(0,275)+
+  guides(color=guide_legend(title="Quintile:"))
+
+if(saveoptions$resave){
+  w=8
+  h=4
+  ggsave(paste0(importdirectories$plotsaves,saveoptions$savetag,"_pclvt.jpeg"),
+         pclvt,width=8,height=4,units="in",dp=600)
+}
+
+
+```
+```{r}
+
+#GONNA TRY AND DO QUARTILE PLOT MY WAY
+#install.packages("fabricatr")
+library(fabricatr)
+split_quantile(x=na.omit(dp$dataQL[VisitID=="BL"]$stniTotal), type=5)
+
+quints<-data.table()
+
+quints$PtID<-na.omit(dp$dataQL[VisitID=="BL"][!is.na(dp$dataQL[VisitID=="BL"]$stniTotal)]$PtID)
+quints$stniBLTotal<-na.omit(dp$dataQL[VisitID=="BL"]$stniTotal)
+quints$bucket <-split_quantile(x=na.omit(dp$dataQL[VisitID=="BL"]$stniTotal), type=5)
+
+setorder(quints, cols="bucket")
+
+View(dp$dataQL$trelative)
+dp$dataQL[PtID=="H101"]$trelative
+dp$dataQL[PtID=="H101"]$stniTotal
+ggplot(data= dp$dataQL, aes(trelative, stniTotal))+geom_line()
+
+  trtr <- data.frame()
+  for (i in 1:830)
+ {
+   trtrt <- dp$dataQL[PtID==paste("H",i,sep="")][VisitID=="BL"]$stni9total
+   trtr <- rbind(trtr, trtrt)
+  }
+  unique(dp$dataQL$PtID)
+  
+  sapply
+
+```
+
+```{r}
+#NICE FORMATTING FOR PUBLICATION GRPAHS
+
+#BASE CODE PROVIDED THAT I'M WORKING OFF OF
+#p1=ggplot(data=dp$data[VisitID==1],aes(x=COVID_categorization,y=NeuroQoLtotal))+geom_boxplot(outlier.shape=NA)+
+#  geom_jitter(color="black",size=.4,alpha=.7,width=.2)+theme_classic()+
+#  xlab("History of COVID-19")+ylab("Self-Reported Cognitive Functioning\n(NeuroQoL Total Score)")
+#p2=ggplot(data=dp$data[VisitID==1],aes(x=COVID_categorization,y=whoQoLD1raw))+geom_boxplot(outlier.shape=NA)+
+#  geom_jitter(color="black",size=.4,alpha=.7,width=.2)+theme_classic()+
+#  xlab("History of COVID-19")+ylab('Physical Health-Related Quality of Life\n(WHO-QoL BREF D1 total)')
+#p3=ggplot(data=dp$data[VisitID==1][COVID_categorization==TRUE],aes(x=NeuroQoLtotal,y=whoQoLD1raw))+
+#  geom_jitter(width=.1,height = .75,alpha=.5)+
+#  annotate("text",x=15,y=34,label=plotlabel)+
+#  geom_smooth(method=lm,se=FALSE,color="black",fullrange=TRUE)+theme_classic()+
+#  xlab("Self-Reported Cognitive Functioning\n(NeuroQoL Total Score)")+ylab('Physical Health-Related Quality of Life\n(WHO-QoL BREF D1 total)')
+#p3
+
+# Tag them with panel labels
+#p1=p1+labs(tag = "A")
+#p2=p2+labs(tag = "B")
+#p3=p3+labs(tag = "C")
+#ml <- grid.arrange(grobs=list(p1,p2,p3),
+#                   nrow=1,ncol=3,
+#                   widths=c(.4,.4,.6))
+
+# Save
+#ggsave(paste0(importdirectories$plotsaves,saveoptions$savetag,"_COMPASSandWHOqolD1andCOVID.jpeg"),
+#       ml,width=9,height=4,units="in",dp=600)
+
+
+
+
+p1=ggplot(data=dp$data[VisitID=="BL"],aes(x=COVID_categorization,y=NeuroQoLtotal))+geom_boxplot(outlier.shape=NA)+
+  geom_jitter(color="black",size=.4,alpha=.7,width=.2)+theme_classic()+
+  xlab("History of COVID-19")+ylab("Self-Reported Cognitive Functioning\n(NeuroQoL Total Score)")
+p2=ggplot(data=dp$data[VisitID==1],aes(x=COVID_categorization,y=whoQoLD1raw))+geom_boxplot(outlier.shape=NA)+
+  geom_jitter(color="black",size=.4,alpha=.7,width=.2)+theme_classic()+
+  xlab("History of COVID-19")+ylab('Physical Health-Related Quality of Life\n(WHO-QoL BREF D1 total)')
+p3=ggplot(data=dp$data[VisitID==1][COVID_categorization==TRUE],aes(x=NeuroQoLtotal,y=whoQoLD1raw))+
+  geom_jitter(width=.1,height = .75,alpha=.5)+
+  annotate("text",x=15,y=34,label=plotlabel)+
+  geom_smooth(method=lm,se=FALSE,color="black",fullrange=TRUE)+theme_classic()+
+  xlab("Self-Reported Cognitive Functioning\n(NeuroQoL Total Score)")+ylab('Physical Health-Related Quality of Life\n(WHO-QoL BREF D1 total)')
+p3
+
+# Tag them with panel labels
+p1=p1+labs(tag = "A")
+p2=p2+labs(tag = "B")
+p3=p3+labs(tag = "C")
+ml <- grid.arrange(grobs=list(p1,p2,p3),
+                   nrow=1,ncol=3,
+                   widths=c(.4,.4,.6))
+
+# Save
+ggsave(paste0(importdirectories$plotsaves,saveoptions$savetag,"_COMPASSandWHOqolD1andCOVID.jpeg"),
+       ml,width=9,height=4,units="in",dp=600)
+```
+
+
+#time PCL
+na.omit(data.table(dp$dataQL[VisitID=="BL"]$PtID, dp$dataQL[VisitID=="BL"]$pcl5total, dp$dataQL[VisitID=="OO2wk"]$pcl5total))
